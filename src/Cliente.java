@@ -1,188 +1,118 @@
-// ENVIA EL ARCHIVO POR DATAGRAMA SIN VENTANA DESLIZANTE NI RETROCEDER N
-
-/*import java.io.*;
-import java.net.*;
-
-public class Cliente {
-
-    public static void main(String[] args) {
-        final String serverHost = "127.0.0.1"; // Dirección IP del servidor
-        final int serverPort = 8888;
-
-        try (DatagramSocket socket = new DatagramSocket()) {
-            InetAddress serverAddress = InetAddress.getByName(serverHost);
-
-            File file = new File("C:\\Users\\mreye\\Downloads\\Redes\\Local\\archivoA.jpg");
-            FileInputStream fileInputStream = new FileInputStream(file);
-
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-            int totalBytesSent = 0;
-
-            System.out.println("Iniciando envío del archivo...");
-
-            while ((bytesRead = fileInputStream.read(buffer)) != -1) {
-                DatagramPacket packet = new DatagramPacket(buffer, bytesRead, serverAddress, serverPort);
-                socket.send(packet);
-                totalBytesSent += bytesRead;
-                
-                System.out.println("Enviados " + bytesRead + " bytes. Total enviados: " + totalBytesSent + " bytes.");
-                
-                Thread.sleep(10); // Añade una pequeña pausa entre cada envío (opcional)
-            }
-
-            System.out.println("Archivo enviado correctamente. Total bytes enviados: " + totalBytesSent + " bytes.");
-
-        } catch (IOException | InterruptedException e) {
-            e.printStackTrace();
-        }
-    }
-}
-
-// ENVIO CON VENTANA DESLIZANTE
+import javax.swing.*;
 import java.io.*;
 import java.net.*;
+import java.nio.ByteBuffer;
 
 public class Cliente {
-
-    public static void main(String[] args) {
-        final String serverHost = "127.0.0.1";
-        final int serverPort = 8888;
-        final int windowSize = 5; // Tamaño de la ventana
-
-        try (DatagramSocket socket = new DatagramSocket()) {
-            InetAddress serverAddress = InetAddress.getByName(serverHost);
-
-            File file = new File("C:\\Users\\mreye\\Downloads\\Redes\\Local\\backlog.pdf");
-            FileInputStream fileInputStream = new FileInputStream(file);
-
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-            int totalBytesSent = 0;
-
-            DatagramPacket[] packets = new DatagramPacket[windowSize];
-            boolean[] acknowledged = new boolean[windowSize];
-
-            System.out.println("Iniciando envío del archivo...");
-
-            while ((bytesRead = fileInputStream.read(buffer)) != -1) {
-                DatagramPacket packet = new DatagramPacket(buffer, bytesRead, serverAddress, serverPort);
-                packets[totalBytesSent % windowSize] = packet;
-                acknowledged[totalBytesSent % windowSize] = false;
-                totalBytesSent += bytesRead;
-
-                socket.send(packet);
-                System.out.println("Enviados " + bytesRead + " bytes. Total enviados: " + totalBytesSent + " bytes.");
-
-                // Esperar confirmación selectiva
-                if (totalBytesSent % (windowSize * 1024) == 0 || bytesRead < 1024) {
-                    waitForAcknowledgements(socket, packets, acknowledged, windowSize);
-                }
-            }
-
-            System.out.println("Archivo enviado correctamente. Total bytes enviados: " + totalBytesSent + " bytes.");
-
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private static void waitForAcknowledgements(DatagramSocket socket, DatagramPacket[] packets, boolean[] acknowledged, int windowSize) throws IOException {
-        long timeout = 5000; // Tiempo de espera en milisegundos
-        long startTime = System.currentTimeMillis();
-
-        while (true) {
-            boolean allAcknowledged = true;
-            for (int i = 0; i < windowSize; i++) {
-                if (!acknowledged[i]) {
-                    allAcknowledged = false;
-                    break;
-                }
-            }
-
-            if (allAcknowledged) {
-                break;
-            }
-
-            if (System.currentTimeMillis() - startTime >= timeout) {
-                // Reenviar paquetes no confirmados
-                for (int i = 0; i < windowSize; i++) {
-                    if (!acknowledged[i] && packets[i] != null) {
-                        socket.send(packets[i]);
-                    }
-                }
-                startTime = System.currentTimeMillis();
-            }
-
-            // Esperar una pequeña cantidad de tiempo antes de verificar nuevamente
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-    }
-}
-
-*/
-// ENVIA EL ARCHIVO POR DATAGRAMA CON VENTANA DESLIZANTE FALTA RETROCEDER N
-import java.io.*;
-import java.net.*;
-import java.util.*;
-
-public class Cliente {
-    private static final int PACKET_SIZE = 1024;
-    private static final int WINDOW_SIZE = 5;
+    private static final int TamPaquete = 2048; // tamaño máximo de cada paquete de datos a enviar
+    private static final int TamVentana = 5; // cantidad máxima de paquetes sin ACKs pendientes
+    private static final long TIMEOUT = 500; // Tiempo de espera acks 
 
     public static void main(String[] args) throws IOException {
         String serverHost = "127.0.0.1"; // Dirección IP del servidor
         int serverPort = 9876; // Puerto del servidor
-        String filePath = "C:\\Users\\mreye\\Downloads\\Redes\\Local\\archivoA.jpg"; // Ruta del archivo a enviar
 
-        DatagramSocket socket = new DatagramSocket();
-        InetAddress serverAddress = InetAddress.getByName(serverHost);
+        /* JFileChooser para seleccionar el archivo */
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Seleccionar archivo a enviar");
+        fileChooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
 
-        File file = new File(filePath);
-        FileInputStream fileInputStream = new FileInputStream(file);
+        int userSelection = fileChooser.showOpenDialog(null);
+        if (userSelection == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            /* obtiene la ruta absoluta del archivo */
+            String filePath = selectedFile.getAbsolutePath();
+            System.out.println("Enviando archivo: " + selectedFile.getName());
 
-        byte[] fileBytes = new byte[(int) file.length()];
-        fileInputStream.read(fileBytes);
+            /* se crea el socket UDP para enviar los paquetes al servidor */
+            DatagramSocket socket = new DatagramSocket();
+            /* obtenemos la dirección IP del servidor (serverHost) con una instancia de la clase InetAddress. */
+            InetAddress serverAddress = InetAddress.getByName(serverHost);
 
-        int totalPackets = (int) Math.ceil((double) fileBytes.length / PACKET_SIZE);
-        System.out.println("Enviando " + totalPackets + " paquetes al servidor...");
+            /* objeto File a partir de la ruta absoluta del archivo que se selecciono y se lee su contenido en un array de bytes (fileBytes). */
+            File file = new File(filePath);
+            FileInputStream fileInputStream = new FileInputStream(file);
+            /* creamos un array de bytes de tamaño de la longitud del archivo */
+            byte[] fileBytes = new byte[(int) file.length()];
+            /* leemos los bytes de forma secuencial del fileinputstream y los guardamos en fileBytes */
+            fileInputStream.read(fileBytes);
 
-        // Enviar el número total de paquetes al servidor
-        byte[] totalPacketsData = String.valueOf(totalPackets).getBytes();
-        DatagramPacket totalPacketsPacket = new DatagramPacket(totalPacketsData, totalPacketsData.length, serverAddress, serverPort);
-        socket.send(totalPacketsPacket);
+            /* se calcula el número total de paquetes que se enviarán 
+             * .ceil redondea hacia arriba
+            */
+            int totalPackets = (int) Math.ceil((double) fileBytes.length / TamPaquete);
+            System.out.println("Enviando " + totalPackets + " paquetes al servidor.");
+            
+            /* variables para ventana deslizante */
+            int base = 0; // base se establece en 0 para indicar que la ventana comienza en el paquete 0.
+            int nextSeqNum = 0; // número de secuencia del próximo paquete que se enviara 0 indica  que comenzara a enviar paqutes con el seqnum 0
 
-        // Enviar el archivo dividido en paquetes
-        int base = 0;
-        int nextSeqNum = 0;
-        while (base < totalPackets) {
-            while (nextSeqNum < base + WINDOW_SIZE && nextSeqNum < totalPackets) {
-                int packetSize = Math.min(PACKET_SIZE, fileBytes.length - nextSeqNum * PACKET_SIZE);
-                byte[] packetData = Arrays.copyOfRange(fileBytes, nextSeqNum * PACKET_SIZE, nextSeqNum * PACKET_SIZE + packetSize);
-                DatagramPacket packet = new DatagramPacket(packetData, packetData.length, serverAddress, serverPort);
-                socket.send(packet);
-                System.out.println("Enviado paquete " + nextSeqNum + " - Tamaño: " + packetSize + " bytes");
-                nextSeqNum++;
+            // enviamos nombre y extensión del archivo como seqnum -1
+            String fileNameWithExtension = selectedFile.getName(); // almacena nombre y extension del archivo
+            byte[] fileNameBytes = fileNameWithExtension.getBytes(); // convertimos el nombre y extension del archivo en un array de bytes para poder enviarlo por el socket
+            byte[] fileNamePacket = new byte[fileNameBytes.length + 4]; // 4 bytes para el número de secuencia
+            ByteBuffer.wrap(fileNamePacket, 0, 4).putInt(-1); // escribe el numero de secuencia -1
+            /* copia los bytes que contiene el nombre y extension del archivo en el fileNamePacket, comienza desde el 4 porque ahi se escribe el seqnum*/
+            System.arraycopy(fileNameBytes, 0, fileNamePacket, 4, fileNameBytes.length);
+
+            /* enviamos los datos */
+            DatagramPacket fileNameDatagram = new DatagramPacket(fileNamePacket, fileNamePacket.length, serverAddress, serverPort);
+            socket.send(fileNameDatagram);
+
+            while (base < totalPackets) {
+                /* mientras el número de secuencia del próximo paquete está dentro de la ventana ( base + TamVentana) y extSeqNum es menor que total de paquetes a enviar*/
+                while (nextSeqNum < base + TamVentana && nextSeqNum < totalPackets) {
+                    int index = nextSeqNum * TamPaquete; //  índice de inicio en el array fileBytes desde donde se empieza a leer bytes para construir el próximo paquete.
+                    int bytesFaltantes = fileBytes.length - index; 
+                    int packetSize = Math.min(TamPaquete, bytesFaltantes);
+
+                    byte[] packetData = new byte[packetSize + 4]; // array de bytes para los datos del paquete y 4 bytes para el número de secuencia
+                    ByteBuffer.wrap(packetData, 0, 4).putInt(nextSeqNum); // escribe el numero de secuencia en los primeros 4 bytes
+                    System.arraycopy(fileBytes, index, packetData, 4, packetSize); // copia los datos apartir del index pero despues de los 4 primeros bytes
+
+                    /* enviamos los datos */
+                    DatagramPacket packet = new DatagramPacket(packetData, packetData.length, serverAddress, serverPort);
+                    socket.send(packet);
+
+                    System.out.println("Enviado paquete " + nextSeqNum + " - Tamaño: " + packet.getLength() + " bytes");
+
+                    /* se incrementa para el siguiente paquete */
+                    nextSeqNum++;
+                }
+
+                /* si no se recibe ack dentro del tiempo especificado se lanza la excepcion*/
+                socket.setSoTimeout((int) TIMEOUT);
+
+                try {
+                    while (true) {
+                        /* crea un array de bytes (ackBuffer) para almacenar el ack  */
+                        byte[] ackBuffer = new byte[4]; 
+                        DatagramPacket ackPacket = new DatagramPacket(ackBuffer, ackBuffer.length);
+                        /* esperará hasta que se reciba un paquete o hasta que se alcance el timeout */
+                        socket.receive(ackPacket);
+                        int ackNum = ByteBuffer.wrap(ackBuffer).getInt(); // extrae el seqnum
+
+                        /* verifica si el ack stá dentro de la ventana actual 
+                        si es así, significa que se ha recibido un ack válido para un paquete dentro de la ventana. */
+                        if (ackNum >= base && ackNum < base + TamVentana) {
+                            /* Cuando se recibe un ACK para un paquete dentro de la ventana, 
+                            base se mueve hacia adelante hasta el siguiente número de secuencia no confirmado. */
+                            base = ackNum + 1;
+                            System.out.println("Recibido ACK del servidor para paquete " + ackNum);
+                            break;
+                        }
+                    }
+                } catch (SocketTimeoutException e) {
+                    System.out.println("Timeout, retransmitiendo desde el paquete " + base);
+                    nextSeqNum = base; // retrocederá al inicio de la ventana deslizante y retransmitirá los paquetes
+                }
             }
 
-            // Esperar confirmaciones del servidor
-            byte[] ackBuffer = new byte[1024];
-            DatagramPacket ackPacket = new DatagramPacket(ackBuffer, ackBuffer.length);
-            socket.receive(ackPacket);
-            String ackMsg = new String(ackPacket.getData(), 0, ackPacket.getLength());
-            int ackNum = Integer.parseInt(ackMsg);
-            System.out.println("Recibido ACK del servidor para paquete " + ackNum);
-
-            // Actualizar la ventana deslizante
-            base = Math.max(base, ackNum + 1);
+            System.out.println("Todos los paquetes enviados correctamente.");
+            socket.close();
+            fileInputStream.close();
+        } else {
+            System.out.println("Operación cancelada. Saliendo.");
         }
-
-        System.out.println("Todos los paquetes enviados correctamente.");
-        socket.close();
-        fileInputStream.close();
     }
 }

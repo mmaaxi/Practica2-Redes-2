@@ -1,94 +1,80 @@
-// RECIBE EL ARCHIVO POR DATAGRAMA SIN VENTANA DESLIZANTE NI RETROCEDER N
-
-/*import java.io.*;
-import java.net.*;
-
-public class Servidor {
-
-    public static void main(String[] args) {
-        final int serverPort = 8888;
-
-        try (DatagramSocket socket = new DatagramSocket(serverPort)) {
-            byte[] buffer = new byte[1024];
-
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-            FileOutputStream fileOutputStream = new FileOutputStream("C:\\Users\\mreye\\Downloads\\Redes\\Local\\recibidos\\archivo_recibido.jpg");
-
-            System.out.println("Esperando la recepción del archivo...");
-
-            while (true) {
-                socket.receive(packet);
-
-                int bytesRead = packet.getLength();
-                fileOutputStream.write(packet.getData(), 0, bytesRead);
-
-                System.out.println("Recibidos " + bytesRead + " bytes.");
-
-                if (bytesRead < buffer.length) {
-                    break; // Fin del archivo
-                }
-
-                // Restablecer la longitud del paquete para la próxima recepción
-                packet.setLength(buffer.length);
-            }
-
-            System.out.println("Archivo recibido correctamente.");
-
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-}
-*/
-// RECIBE EL ARCHIVO POR DATAGRAMA CON VENTANA DESLIZANTE FALTA RETROCEDER N
 import java.io.*;
 import java.net.*;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 public class Servidor {
-    private static final int PACKET_SIZE = 1024;
+    private static final int TamPaquete = 2048;
+    private static final double ProbPerdidaPaquete = 0.1;
 
     public static void main(String[] args) throws IOException {
         int serverPort = 9876; // Puerto del servidor
-
         DatagramSocket socket = new DatagramSocket(serverPort);
-        System.out.println("Servidor esperando la transferencia de archivo...");
 
-        // Recibir el número total de paquetes del cliente
-        byte[] totalPacketsBuffer = new byte[1024];
-        DatagramPacket totalPacketsPacket = new DatagramPacket(totalPacketsBuffer, totalPacketsBuffer.length);
-        socket.receive(totalPacketsPacket);
-        int totalPackets = Integer.parseInt(new String(totalPacketsPacket.getData(), 0, totalPacketsPacket.getLength()));
-        System.out.println("Número total de paquetes a recibir: " + totalPackets);
+        System.out.println("Servidor esperando recibir paquetes...");
 
-        byte[] receivedFile = new byte[totalPackets * PACKET_SIZE];
+        int NumSeqEsperado = 0;
+        byte[] fileData = new byte[0];
+        String savePath = null;
+        String fileName = null;
 
-        // Recibir los paquetes del cliente
-        for (int i = 0; i < totalPackets; i++) {
-            byte[] packetBuffer = new byte[PACKET_SIZE];
-            DatagramPacket packet = new DatagramPacket(packetBuffer, packetBuffer.length);
-            socket.receive(packet);
+        while (true) {
+            byte[] receiveBuffer = new byte[TamPaquete + 4]; // tamaño del paquete más espacio para el número de secuencia}
+            /* recibe los paquetes */
+            DatagramPacket receivePacket = new DatagramPacket(receiveBuffer, receiveBuffer.length);
+            socket.receive(receivePacket);
 
-            // Almacenar el paquete recibido en el arreglo del archivo
-            int packetSize = packet.getLength();
-            System.arraycopy(packet.getData(), 0, receivedFile, i * PACKET_SIZE, packetSize);
-            System.out.println("Recibido paquete " + i + " - Tamaño: " + packetSize + " bytes");
+            // simulamos perdida de paquetes para retroceder n
+            if (Math.random() < ProbPerdidaPaquete) {
+                System.out.println("Paquete perdido, esperando retransmisión...");
+                continue;
+            }
 
-            // Enviar confirmación de recepción (ACK) al cliente
-            String ackMsg = String.valueOf(i);
-            byte[] ackBuffer = ackMsg.getBytes();
-            DatagramPacket ackPacket = new DatagramPacket(ackBuffer, ackBuffer.length, packet.getAddress(), packet.getPort());
-            socket.send(ackPacket);
+            byte[] packetData = Arrays.copyOfRange(receivePacket.getData(), 0, receivePacket.getLength()); // extrae los datos del receivePacket
+            int NumSequencia = ByteBuffer.wrap(packetData, 0, 4).getInt(); // lee los primeros 4 bytes como un entero para obtener el seqnum
+
+            if (NumSequencia == -1) {
+                // Paquete especial que contiene el nombre y extensión del archivo
+                fileName = new String(packetData, 4, packetData.length - 4); // extrae el nombre del archivo enviado
+                savePath = "C:\\Users\\mreye\\Downloads\\P2\\archivos_recibidos\\" + fileName; // declaramos la ruta donde se guardara el archivo
+                System.out.println("Guardando archivo como: " + fileName);
+                
+            } else if (NumSequencia == NumSeqEsperado) {
+                /* se ha recibido un paquete de datos en orden y corresponde al siguiente seqnum */
+                byte[] packetFileData = Arrays.copyOfRange(packetData, 4, packetData.length); // extrae los datos del paquete omitiendo los primeros 4 bytes
+                System.out.println("Recibido paquete " + NumSequencia + " - Tamaño: " + packetFileData.length + " bytes");
+
+                // vamos juntando cada paquete al archivo completo
+                fileData = concatenateByteArrays(fileData, packetFileData);
+
+                // enviamos ack al cliente
+                byte[] ackBytes = ByteBuffer.allocate(4).putInt(NumSequencia).array(); // inserta el seqnum para que el cliente lo reciba
+                DatagramPacket ackPacket = new DatagramPacket(ackBytes, ackBytes.length, receivePacket.getAddress(), receivePacket.getPort());
+                socket.send(ackPacket);
+
+                NumSeqEsperado++; // se incrementa para el siguiente paquete
+
+                if (receivePacket.getLength() < TamPaquete + 4) {
+                    /* significa que es el ultimo paquete por recibir*/
+                    FileOutputStream fileOutputStream = new FileOutputStream(savePath); 
+                    fileOutputStream.write(fileData); // escribimos los datos de fileData en el archivo final
+                    fileOutputStream.flush(); // push
+                    System.out.println("Archivo recibido y guardado correctamente como: " + savePath);
+                    fileOutputStream.close();
+                    break;
+                }
+            } else {
+                System.out.println("Descartando paquete duplicado o fuera de orden: " + NumSequencia);
+            }
         }
 
-        // Guardar el archivo recibido
-        String savePath = "C:\\Users\\mreye\\Downloads\\Redes\\Local\\recibidos\\recibido.jpg";
-        FileOutputStream fileOutputStream = new FileOutputStream(savePath);
-        fileOutputStream.write(receivedFile);
-        fileOutputStream.close();
-
-        System.out.println("Archivo recibido y guardado correctamente.");
         socket.close();
     }
+
+    private static byte[] concatenateByteArrays(byte[] a, byte[] b) {
+        byte[] result = new byte[a.length + b.length]; // array de bytes de logitud a + b 
+        System.arraycopy(a, 0, result, 0, a.length); // copia desde a hasta a.length 
+        System.arraycopy(b, 0, result, a.length, b.length); // copia desde a.length hasta b.length
+        return result; // retornamos el array
+    }
 }
-
-
